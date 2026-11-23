@@ -445,6 +445,16 @@
         <small>用「广告 / 恰饭」类吐槽弹幕定位广告段，零依赖；弹幕太少的视频会自动跳过</small>
     </div>
     <div class="setting">
+        <label class="checkbox-label" for="useLocalASR">
+            本地语音识别（实验）
+            <span>
+                <input type="checkbox" id="useLocalASR">
+                <span class="switch"></span>
+            </span>
+        </label>
+        <small>需先执行 node tools/fetch-asr-assets.mjs 下载约 63 MB 资产；未安装时自动回退阿里云</small>
+    </div>
+    <div class="setting">
         <label class="checkbox-label" for="useCloudAI">
             内置模型无结果时回退云端 AI
             <span>

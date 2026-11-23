@@ -59,12 +59,13 @@
         // 内置模型
         useBuiltinAdModel: true, // 离线广告识别模型（字幕分词 + 词表打分）
         useDanmakuSignal: true,  // 无字幕时用弹幕吐槽定位广告段
+        useLocalASR: false,      // 本地 Whisper（需先执行 tools/fetch-asr-assets.mjs）
         useCloudAI: true,        // 内置模型无法判定时回退云端大模型
         useWebGPU: true,         // 允许使用 WebGPU 推理通道
         decisionThreshold: 0.5   // 微型决策模型的跳过阈值
     };
 
-    const BOOLEAN_KEYS = ["enabled", "autoJump", "audioEnabled", "autoAudio", "useBuiltinAdModel", "useDanmakuSignal", "useCloudAI", "useWebGPU"];
+    const BOOLEAN_KEYS = ["enabled", "autoJump", "audioEnabled", "autoAudio", "useBuiltinAdModel", "useDanmakuSignal", "useLocalASR", "useCloudAI", "useWebGPU"];
     const NUMBER_KEYS = ["skipMinDuration", "skipMaxGap", "skipMaxRatio", "requestTimeoutMs", "decisionThreshold"];
     const STRING_KEYS = [
         "tagFilter", "apiURL", "apiKey", "apiModel", "aliApiKey", "aliApiURL",

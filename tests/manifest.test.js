@@ -82,6 +82,19 @@ check("后端使用 response_format",
 check("无字幕提示不再写成配置报错", !contentSource.includes("Please set aliApiKey"));
 check("无字幕提示说明原因", contentSource.includes("该视频没有字幕"));
 
+console.log("\n[本地语音] 实验功能接线");
+const bgSource = fs.readFileSync(path.join(EXT, "background.js"), "utf8");
+check("offscreen 页面存在", exists("offscreen.html") && exists("offscreen.js"));
+check("声明 offscreen 权限", manifest.permissions.includes("offscreen"));
+check("background 创建 offscreen 文档", bgSource.includes("chrome.offscreen.createDocument"));
+check("background 转发识别请求", bgSource.includes("asrTranscribe"));
+check("content 侧有本地识别入口", contentSource.includes("transcribeLocally"));
+check("默认关闭（需先装资产）", /useLocalASR:\s*false/.test(fs.readFileSync(path.join(EXT, "settings.js"), "utf8")));
+check("popup 有开关", fs.readFileSync(path.join(EXT, "popup.html"), "utf8").includes('id="useLocalASR"'));
+const ignore = fs.readFileSync(path.join(__dirname, "..", ".gitignore"), "utf8");
+check("大体积资产不入库", ignore.includes("BilibiliAiSkip/vendor/") && ignore.includes("BilibiliAiSkip/models/asr/"));
+check("提供资产下载脚本", fs.existsSync(path.join(__dirname, "..", "tools", "fetch-asr-assets.mjs")));
+
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));
 check("settings.js 先于 popup.js", order[0] > -1 && order[0] < order[2]);

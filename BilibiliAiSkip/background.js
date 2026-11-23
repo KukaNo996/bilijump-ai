@@ -78,6 +78,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
+  if (message.action === "asrStatus") {
+    callOffscreen({ type: "ping" }, 15000)
+    .then(data => sendResponse({ success: true, data }))
+    .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  if (message.action === "asrTranscribe") {
+    // 音频 CDN 需要 Referer，offscreen 里的 fetch 也要走这条规则
+    ensureBilibiliAudioHeaders()
+    .then(() => callOffscreen({ type: "transcribe", audioUrl: message.audioUrl }))
+    .then(data => sendResponse({ success: true, data }))
+    .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
   if (message.action === "dbQuery") {
     fetch(message.url, {
       method: message.method || "POST",
@@ -357,6 +371,43 @@ async function resetSettings() {
   await chrome.storage.local.remove("bilijump.settings");
   if (typeof BJS !== "undefined") BJS.clearCache();
   return getSettingsSafe();
+}
+
+/* --------------------------- 本地语音识别（offscreen） --------------------------- */
+
+let offscreenCreating = null;
+
+async function ensureOffscreen() {
+  if (!chrome.offscreen) throw new Error("当前浏览器不支持 offscreen API");
+
+  if (typeof chrome.offscreen.hasDocument === "function" && await chrome.offscreen.hasDocument()) return;
+  if (offscreenCreating) return offscreenCreating;
+
+  offscreenCreating = chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["WORKERS"],
+    justification: "本地语音识别需要 WebGPU 与 AudioContext，service worker 里都不可用"
+  }).catch(error => {
+    // 已存在会在并发时抛错，忽略
+    if (!/single offscreen/i.test(error.message)) throw error;
+  }).finally(() => {
+    offscreenCreating = null;
+  });
+
+  return offscreenCreating;
+}
+
+function callOffscreen(payload, timeoutMs = 600000) {
+  return ensureOffscreen().then(() => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("本地语音识别超时")), timeoutMs);
+    chrome.runtime.sendMessage(Object.assign({ target: "bjs-offscreen" }, payload), response => {
+      clearTimeout(timer);
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      if (!response) return reject(new Error("offscreen 无响应"));
+      if (response.ok === false) return reject(new Error(response.error || "本地识别失败"));
+      resolve(response);
+    });
+  }));
 }
 
 const ALI_MONTHLY_QUOTA_SECONDS = 36000;

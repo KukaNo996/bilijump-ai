@@ -602,6 +602,50 @@ async function detectByDanmaku(cid, bvid, pvid) {
     }
 }
 
+/**
+ * 本地 Whisper 语音识别（需先执行 tools/fetch-asr-assets.mjs 装好资产）。
+ * 返回带时间戳的伪字幕，交给后面的内置广告模型继续判定。
+ */
+async function transcribeLocally(bvid, cid) {
+    try {
+        const playResponse = await fetch(
+            `https://api.bilibili.com/x/player/wbi/playurl?bvid=${bvid}&cid=${cid}&qn=0&fnver=0&fnval=80&fourk=1`,
+            { credentials: "include" }
+        );
+        if (!playResponse.ok) return "";
+        const playData = await playResponse.json();
+        const audioUrl = playData?.data?.dash?.audio?.[0]?.base_url;
+        if (!audioUrl) return "";
+
+        popups.others.push(showPopup("本地语音识别中（首次需加载模型，较慢）..."));
+
+        const response = await new Promise(resolve => {
+            chrome.runtime.sendMessage({ action: "asrTranscribe", audioUrl }, result => {
+                resolve(chrome.runtime.lastError
+                    ? { success: false, error: chrome.runtime.lastError.message }
+                    : result);
+            });
+        });
+
+        if (!response?.success || !response.data?.ok) {
+            styleLog("本地语音识别不可用: " + (response?.error || response?.data?.error || "未知原因"));
+            return "";
+        }
+
+        const chunks = Array.isArray(response.data.chunks) ? response.data.chunks : [];
+        if (!chunks.length) return String(response.data.text || "");
+
+        return chunks.map(chunk => {
+            const [from, to] = Array.isArray(chunk.timestamp) ? chunk.timestamp : [];
+            if (!Number.isFinite(from) || !Number.isFinite(to)) return "";
+            return `${from.toFixed(2)} --> ${to.toFixed(2)}\n${String(chunk.text || "").trim()}`;
+        }).filter(Boolean).join("\n");
+    } catch (error) {
+        styleLog("本地语音识别失败: " + error.message);
+        return "";
+    }
+}
+
 async function adRecognition(bvid, pvid, alive = () => true) {
     try {
         let resultS = await chrome.storage.local.get('subtitle');
@@ -654,6 +698,15 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         if (!subtitleUrl) {
             const danmakuResult = await detectByDanmaku(cid, bvid, pvid);
             if (danmakuResult) return danmakuResult;
+
+            // 弹幕没命中时，再试本地 Whisper（需自行装好模型资产）
+            if (settings.useLocalASR) {
+                const localText = await transcribeLocally(bvid, cid);
+                if (localText) {
+                    subtitle = localText;
+                    type = '本地语音';
+                }
+            }
         }
 
         if (subtitleUrl) {
@@ -665,7 +718,7 @@ async function adRecognition(bvid, pvid, alive = () => true) {
             subtitleData.body.forEach(item => {
                 subtitle += `${item.from} --> ${item.to}\n${item.content}\n`;
             });
-        }else if(settings.audioEnabled) {
+        }else if(!subtitle && settings.audioEnabled) {
             type = '音频';
             if (resultS?.subtitle?.hasOwnProperty(cid)) {
                 subtitle = resultS.subtitle[cid];

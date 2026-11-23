@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
     const keys = ['autoJump', 'enabled', 'tagFilter', 'apiKey', 'apiURL', 'apiModel', 'audioEnabled', 'autoAudio', 'aliApiKey',
-        'useBuiltinAdModel', 'useDanmakuSignal', 'useCloudAI', 'useWebGPU'];
+        'useBuiltinAdModel', 'useDanmakuSignal', 'useLocalASR', 'useCloudAI', 'useWebGPU'];
     const apiURLInput = document.getElementById('apiURL');
     const apiURLDrop = document.getElementById('apiURLDropdown');
     const apiKeyInput = document.getElementById('apiKey');
