@@ -286,6 +286,39 @@ function testModels() {
     check("空 ads 属于合法的未识别",
         models.extractJson("{\"ads\":[],\"msg\":\"未识别到广告\"}")?.msg, "未识别到广告");
 
+    /* ---- 弹幕信号（无字幕兜底） ---- */
+    const danmakuXml = "<i><chatserver>chat.bilibili.com</chatserver>"
+        + "<d p=\"12.50,1,25,16777215,1793722678,0,abc,1\">这个屏幕素质不错</d>"
+        + "<d p=\"30.10,1,25,16777215,1793722678,0,abc,2\">广告来了</d>"
+        + "<d p=\"31.40,1,25,16777215,1793722678,0,abc,3\">恰饭时间到了</d>"
+        + "<d p=\"32.80,1,25,16777215,1793722678,0,abc,4\">跳过跳过</d>"
+        + "<d p=\"120.00,1,25,16777215,1793722678,0,abc,5\">这里只是聊聊参数</d>"
+        + "</i>";
+    const danmakuEntries = models.parseDanmaku(danmakuXml);
+    check("弹幕解析条数", danmakuEntries.length, 5);
+    check("弹幕解析时间", danmakuEntries[0].time, 12.5);
+    check("弹幕实体解码", models.parseDanmaku("<d p=\"1.0,1,25\">A&amp;B</d>")[0].text, "A&B");
+
+    const danmakuAds = models.detectAdsFromDanmaku(danmakuEntries, { config: lexicon.danmaku });
+    check("弹幕信号命中 1 段", danmakuAds.length, 1);
+    if (danmakuAds.length) {
+        checkTrue("区间前扩 5s", Math.abs(danmakuAds[0].start - 25.1) < 0.01, `start=${danmakuAds[0].start}`);
+        checkTrue("区间后扩 6s", Math.abs(danmakuAds[0].end - 38.8) < 0.01, `end=${danmakuAds[0].end}`);
+        check("标注来源", danmakuAds[0].productName, "弹幕信号");
+    }
+
+    // 只有弱词（跳过/快进）不能单独成立，否则片头"跳过OP"会被误判
+    const weakOnly = models.detectAdsFromDanmaku([
+        { time: 10, text: "跳过OP" }, { time: 12, text: "快进到正片" }
+    ], { config: lexicon.danmaku });
+    check("弱词不成立", weakOnly.length, 0);
+
+    // 弹幕分散且无关键词 → 不产出
+    const noise = models.detectAdsFromDanmaku([
+        { time: 5, text: "好看" }, { time: 50, text: "哈哈" }, { time: 300, text: "厉害了" }
+    ], { config: lexicon.danmaku });
+    check("无关键词不产出", noise.length, 0);
+
     /* ---- 中文促销（日志里 STEPX 那类购机权益话术） ---- */
     const promo = models.detectCandidates(models.parseSubtitle([
         "0.00 --> 20.00", "这台手机的屏幕是六点七英寸的直屏。",

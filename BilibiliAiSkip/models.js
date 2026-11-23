@@ -258,6 +258,114 @@
         return merged;
     }
 
+    /* --------------------------- 弹幕信号（无字幕兜底） --------------------------- */
+
+    /** 解析 dm/list.so 返回的 XML，取出「时间 + 文本」 */
+    function parseDanmaku(xml) {
+        const text = String(xml || "");
+        const entries = [];
+        const pattern = /<d\s+p="([^"]*)"[^>]*>([\s\S]*?)<\/d>/g;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const time = parseFloat(String(match[1]).split(",")[0]);
+            if (!Number.isFinite(time)) continue;
+            const content = match[2]
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">")
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, "&")
+                .trim();
+            if (!content) continue;
+            entries.push({ time, text: content });
+        }
+        return entries.sort((a, b) => a.time - b.time);
+    }
+
+    /**
+     * 用弹幕定位广告区间。
+     * 只作为「无字幕、无音频识别」时的兜底信号：强词（广告/恰饭/软广）命中即成立，
+     * 弱词单独出现不算，避免把「跳过片头」这类弹幕误判成广告。
+     */
+    function detectAdsFromDanmaku(entries, options) {
+        // config 显式传入时优先（便于离线测试），否则用已加载的词表
+        const config = (options && options.config) || (state.lexicon && state.lexicon.danmaku) || null;
+        if (!config) return [];
+        const params = Object.assign({
+            window: 30, minScore: 3, strongOnly: true,
+            padBefore: 5, padAfter: 6, minDuration: 8, maxAds: 5
+        }, config.params || {}, options || {});
+
+        const strong = config.strong || {};
+        const medium = config.medium || {};
+        const scored = [];
+
+        for (const entry of entries) {
+            let score = 0;
+            let strongHits = 0;
+            for (const term of Object.keys(strong)) {
+                if (entry.text.includes(term)) {
+                    score += Number(strong[term]) || 0;
+                    strongHits++;
+                }
+            }
+            for (const term of Object.keys(medium)) {
+                if (entry.text.includes(term)) score += Number(medium[term]) || 0;
+            }
+            if (score > 0) scored.push({ time: entry.time, text: entry.text, score, strongHits });
+        }
+        if (!scored.length) return [];
+
+        // 相邻吐槽聚成一个窗口
+        const groups = [];
+        for (const item of scored) {
+            const last = groups[groups.length - 1];
+            if (last && item.time - last.end <= params.window) {
+                last.end = item.time;
+                last.score += item.score;
+                last.strongHits += item.strongHits;
+                last.texts.push(item.text);
+                continue;
+            }
+            groups.push({
+                start: item.time,
+                end: item.time,
+                score: item.score,
+                strongHits: item.strongHits,
+                texts: [item.text]
+            });
+        }
+
+        const candidates = groups.filter(group => {
+            // 强词命中 (广告/恰饭/软广) 直接成立；否则要累计到阈值
+            if (params.strongOnly && group.strongHits > 0) return true;
+            return group.score >= params.minScore;
+        });
+
+        const ads = candidates.map(group => ({
+            start: Math.max(group.start - params.padBefore, 0),
+            end: group.end + params.padAfter,
+            confidence: Math.min(1, Number((group.score / (params.minScore * 2)).toFixed(3))),
+            productName: "弹幕信号",
+            text: group.texts.join(" / ").slice(0, 200)
+        }));
+
+        ads.sort((a, b) => a.start - b.start);
+        const merged = [];
+        for (const ad of ads) {
+            const last = merged[merged.length - 1];
+            if (last && ad.start <= last.end + 1) {
+                last.end = Math.max(last.end, ad.end);
+                last.confidence = Math.max(last.confidence, ad.confidence);
+                continue;
+            }
+            merged.push(ad);
+        }
+        return merged
+            .filter(ad => ad.end - ad.start >= params.minDuration)
+            .slice(0, params.maxAds);
+    }
+
     /* --------------------------- 微型决策模型 --------------------------- */
 
     function matvecCpu(weights, features, bias) {
@@ -670,6 +778,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         detectCandidates,
         parseSubtitle,
         scoreText,
+        parseDanmaku,
+        detectAdsFromDanmaku,
         normalizeIntervals,
         sanitizeAdPayload,
         toSecondsLoose,

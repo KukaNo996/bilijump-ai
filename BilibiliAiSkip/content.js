@@ -560,8 +560,49 @@ function watchNavigation() {
     activeLog();
 })();
 
-async function adRecognition(bvid, pvid, alive = () => true) {
+/**
+ * 用弹幕定位广告段（无字幕场景的兜底）。
+ * 只做时间定位、不写共享库：弹幕信号是弱证据，不适合污染云端数据。
+ */
+async function detectByDanmaku(cid, bvid, pvid) {
+    if (settings.useDanmakuSignal === false || typeof BJSModels === "undefined") return null;
 
+    try {
+        const response = await fetch(`https://api.bilibili.com/x/v1/dm/list.so?oid=${cid}`, { credentials: "include" });
+        if (!response.ok) return null;
+        const xml = await response.text();
+        if (!xml || xml.indexOf("<d ") === -1) return null;
+
+        const entries = BJSModels.parseDanmaku(xml);
+        // 弹幕太少时统计没有意义，直接放弃，避免误判
+        if (entries.length < 20) return null;
+
+        const video = document.querySelector("video");
+        const ads = BJSModels.detectAdsFromDanmaku(entries, { duration: video?.duration || 0 });
+        if (!ads.length) return null;
+
+        styleLog(`弹幕信号命中 ${ads.length} 段: ${ads.map(ad => `${ad.start.toFixed(0)}-${ad.end.toFixed(0)}`).join(", ")}`);
+        const payload = {
+            ads: ads.map(ad => ({
+                start_time: ad.start.toFixed(2),
+                end_time: ad.end.toFixed(2),
+                product_name: ad.productName,
+                ad_content: ad.text
+            })),
+            msg: "识别到广告",
+            model: "builtin:danmaku"
+        };
+
+        popups.others.push(showPopup(`弹幕信号：${ads.length} 段（${entries.length} 条弹幕）`));
+        correctButton(cid, payload, bvid, pvid);
+        return payload;
+    } catch (error) {
+        styleLog("弹幕信号不可用: " + error.message);
+        return null;
+    }
+}
+
+async function adRecognition(bvid, pvid, alive = () => true) {
     try {
         let resultS = await chrome.storage.local.get('subtitle');
 
@@ -607,6 +648,14 @@ async function adRecognition(bvid, pvid, alive = () => true) {
 
 
         let subtitle = "", type;
+
+        // 无字幕时先用弹幕信号兜底：零成本、不需要 Key、不需要下载模型。
+        // 弹幕里出现"广告/恰饭/软广"的位置通常与广告段对齐，命中就直接返回。
+        if (!subtitleUrl) {
+            const danmakuResult = await detectByDanmaku(cid, bvid, pvid);
+            if (danmakuResult) return danmakuResult;
+        }
+
         if (subtitleUrl) {
             type = '字幕';
             popups.others.push(showPopup("使用字幕分析."));
