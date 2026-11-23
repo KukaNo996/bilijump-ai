@@ -319,6 +319,12 @@ function testModels() {
     ], { config: lexicon.danmaku });
     check("无关键词不产出", noise.length, 0);
 
+    // 本地 ASR 的 chunk 会被拼成伪字幕再交给内置模型，格式必须能被解析
+    const asrChunk = { timestamp: [0, 11], text: " ask not what your country can do for you" };
+    const asrSubtitle = `${asrChunk.timestamp[0].toFixed(2)} --> ${asrChunk.timestamp[1].toFixed(2)}\n${asrChunk.text.trim()}`;
+    check("ASR 伪字幕可被解析", models.parseSubtitle(asrSubtitle).length, 1);
+    check("ASR 伪字幕时间正确", models.parseSubtitle(asrSubtitle)[0].to, 11);
+
     /* ---- 中文促销（日志里 STEPX 那类购机权益话术） ---- */
     const promo = models.detectCandidates(models.parseSubtitle([
         "0.00 --> 20.00", "这台手机的屏幕是六点七英寸的直屏。",
