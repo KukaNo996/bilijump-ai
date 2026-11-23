@@ -11,6 +11,4 @@ node_modules/
 Thumbs.db
 *.log
 
-# 本地语音识别资产（体积大，按需下载，不入库）
-BilibiliAiSkip/vendor/
-BilibiliAiSkip/models/asr/
+# 本地语音识别资产改为随包内置；如需重装可跑 tools/fetch-asr-assets.mjs

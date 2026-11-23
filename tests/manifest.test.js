@@ -89,11 +89,16 @@ check("声明 offscreen 权限", manifest.permissions.includes("offscreen"));
 check("background 创建 offscreen 文档", bgSource.includes("chrome.offscreen.createDocument"));
 check("background 转发识别请求", bgSource.includes("asrTranscribe"));
 check("content 侧有本地识别入口", contentSource.includes("transcribeLocally"));
-check("默认关闭（需先装资产）", /useLocalASR:\s*false/.test(fs.readFileSync(path.join(EXT, "settings.js"), "utf8")));
+check("默认开启（资产随包内置）", /useLocalASR:\s*true/.test(fs.readFileSync(path.join(EXT, "settings.js"), "utf8")));
 check("popup 有开关", fs.readFileSync(path.join(EXT, "popup.html"), "utf8").includes('id="useLocalASR"'));
-const ignore = fs.readFileSync(path.join(__dirname, "..", ".gitignore"), "utf8");
-check("大体积资产不入库", ignore.includes("BilibiliAiSkip/vendor/") && ignore.includes("BilibiliAiSkip/models/asr/"));
-check("提供资产下载脚本", fs.existsSync(path.join(__dirname, "..", "tools", "fetch-asr-assets.mjs")));
+// 资产必须随包分发：扩展加载后即可离线识别，不需要额外下载步骤
+check("运行时已内置", exists("vendor/transformers.min.js") && exists("vendor/ort-wasm-simd-threaded.jsep.wasm"));
+check("模型权重已内置", exists("models/asr/whisper-tiny/onnx/encoder_model_quantized.onnx")
+    && exists("models/asr/whisper-tiny/onnx/decoder_model_merged_quantized.onnx"));
+check("分词文件齐全", exists("models/asr/whisper-tiny/tokenizer.json")
+    && exists("models/asr/whisper-tiny/tokenizer_config.json")
+    && exists("models/asr/whisper-tiny/vocab.json"));
+check("提供资产修复脚本", fs.existsSync(path.join(__dirname, "..", "tools", "fetch-asr-assets.mjs")));
 
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));
