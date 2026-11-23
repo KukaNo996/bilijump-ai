@@ -78,6 +78,9 @@ check("后端剥离内部开关",
     fs.readFileSync(path.join(EXT, "background.js"), "utf8").includes("delete payload.json_mode"));
 check("后端使用 response_format",
     fs.readFileSync(path.join(EXT, "background.js"), "utf8").includes("response_format"));
+// 无字幕且未配阿里云 Key 属于「没素材」，不能报成配置错误误导用户
+check("无字幕提示不再写成配置报错", !contentSource.includes("Please set aliApiKey"));
+check("无字幕提示说明原因", contentSource.includes("该视频没有字幕"));
 
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));

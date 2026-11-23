@@ -623,8 +623,9 @@ async function adRecognition(bvid, pvid, alive = () => true) {
                 popups.others.push(showPopup("使用音频缓存."));
             }else {
                 if(!settings["aliApiKey"]) {
-                    showPopup(`Please set aliApiKey in extension settings`);
-                    return {ads:[], msg:"Please set aliApiKey"};
+                    // 这是「没有素材」而不是「LLM 配置错」：不要把提示写成配置报错，
+                    // 否则用户会误以为本地端点没生效
+                    return {ads:[], msg:"该视频没有字幕；音频识别需填阿里云 Key（可在设置中填写，或关闭“启用音频分析”）"};
                 }
                 let aliModel;
                 try {
@@ -702,7 +703,12 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         }
 
         if (!subtitle) {
-            return {ads:[], msg:"无解析内容."};
+            return {
+                ads: [],
+                msg: settings.audioEnabled
+                    ? "未取到字幕或音频文本，已跳过"
+                    : "该视频没有字幕，且未启用音频识别，已跳过"
+            };
         }
 
         subtitle = `标题: ${title}
