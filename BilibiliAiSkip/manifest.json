@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Bilibili AI Skip",
+  "version": "2.4.0",
+  "minimum_chrome_version": "102",
+  "description": "一个使用 AI 自动跳过 Bilibili 视频植入广告的 Chrome 扩展程序。",
+  "host_permissions": [
+    "*://dashscope.aliyuncs.com/*",
+    "https://*.aliyuncs.com/*",
+    "*://*.bilivideo.com/*",
+    "*://*.bilivideo.cn/*",
+    "*://api.cloudflare.com/*",
+    "*://api.bilibili.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "permissions": [
+    "storage",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bilibili.com/video/*",
+        "*://*.bilibili.com/list/watchlater*"
+      ],
+      "js": ["settings.js", "models.js", "content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon48_red_3.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon48*.png", "models/*.json", "models/**/*"],
+      "matches": ["*://*.bilibili.com/*"]
+    }
+  ],
+  "homepage_url": "https://oooo.uno"
+}

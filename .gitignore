@@ -1,0 +1,12 @@
+# 本地工作区数据（AI 会话与记忆，不属于项目产物）
+.workbuddy/
+
+# 临时目录与本地克隆副本
+_upstream/
+.remote-tmp/
+node_modules/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log

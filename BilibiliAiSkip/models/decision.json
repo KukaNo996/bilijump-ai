@@ -1,0 +1,21 @@
+{
+  "name": "bilijump-decide-mini",
+  "version": 1,
+  "type": "logistic",
+  "description": "微型跳过决策模型：对候选广告区间做二分类，输出跳过概率。特征 8 维，权重为标准化后的线性系数。",
+  "threshold": 0.5,
+  "features": [
+    "scoreNorm",
+    "durationRatio",
+    "absDuration",
+    "position",
+    "termHits",
+    "ctaHits",
+    "charRate",
+    "sourceConfidence"
+  ],
+  "means": [1.0, 0.04, 60.0, 0.3, 6.0, 2.0, 3.5, 0.9],
+  "scales": [0.6, 0.04, 40.0, 0.25, 4.0, 2.0, 1.5, 0.15],
+  "weights": [1.2, -0.35, 0.5, -0.15, 1.0, 0.8, 0.2, 0.3],
+  "bias": -0.6
+}
