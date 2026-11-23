@@ -34,6 +34,9 @@ const JSDELIVR = `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANS
 
 const ASSETS = [
   { url: `${JSDELIVR}/transformers.min.js`, out: "vendor/transformers.min.js", bytes: 873307 },
+  // ort 是「.mjs 加载器 + .wasm 本体」成对使用的，只放 .wasm 会报
+  // "Failed to fetch dynamically imported module: ...jsep.mjs"
+  { url: `${JSDELIVR}/ort-wasm-simd-threaded.jsep.mjs`, out: "vendor/ort-wasm-simd-threaded.jsep.mjs", bytes: 44484 },
   { url: `${JSDELIVR}/ort-wasm-simd-threaded.jsep.wasm`, out: "vendor/ort-wasm-simd-threaded.jsep.wasm", bytes: 21596019 },
   { url: `${MIRROR}/${MODEL_REPO}/resolve/main/config.json`, out: "models/asr/whisper-tiny/config.json", bytes: 2248 },
   { url: `${MIRROR}/${MODEL_REPO}/resolve/main/tokenizer.json`, out: "models/asr/whisper-tiny/tokenizer.json", bytes: 2480466 },
