@@ -15,6 +15,7 @@ const VENDOR = "vendor/transformers.min.js";
 const WASM_DIR = "vendor/";
 const MODEL_DIR = "models/asr/";
 
+let runtimePromise = null;
 let transcriberPromise = null;
 
 function assetUrl(relative) {
@@ -31,33 +32,42 @@ async function assetExists(relative) {
 }
 
 async function assetsReady() {
-    return await assetExists(VENDOR) && await assetExists(`${MODEL_DIR}${MODEL_ID}/onnx/encoder_model_quantized.onnx`);
+    return await assetExists(VENDOR)
+        && await assetExists(`${MODEL_DIR}${MODEL_ID}/onnx/encoder_model_quantized.onnx`);
 }
 
-function injectRuntime() {
-    if (self.Transformers) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = assetUrl(VENDOR);
-        script.onload = () => (self.Transformers ? resolve() : reject(new Error("transformers.js 未导出 Transformers")));
-        script.onerror = () => reject(new Error(`无法加载 ${VENDOR}`));
-        document.head.appendChild(script);
-    });
+/**
+ * 加载推理库。
+ * 注意：dist/transformers.min.js 是 ESM（文件尾部是 export{...}），没有 UMD 全局，
+ * 用 <script src> 加载拿不到任何东西（会报「未导出 Transformers」），必须动态 import。
+ */
+function loadRuntime() {
+    if (runtimePromise) return runtimePromise;
+    runtimePromise = import(assetUrl(VENDOR))
+        .then(module => {
+            if (!module?.pipeline) throw new Error("transformers.js 未导出 pipeline");
+            return module;
+        })
+        .catch(error => {
+            runtimePromise = null;
+            throw new Error(`加载 ${VENDOR} 失败：${error.message}`);
+        });
+    return runtimePromise;
 }
 
 async function ensureTranscriber(onProgress) {
     if (transcriberPromise) return transcriberPromise;
 
     transcriberPromise = (async () => {
-        await injectRuntime();
-        const { env, pipeline } = self.Transformers;
+        const { env, pipeline } = await loadRuntime();
 
         // 只从扩展包内加载，绝不联网：模型 id 直接对应 models/asr/<id>/
         env.allowRemoteModels = false;
         env.allowLocalModels = true;
         env.localModelPath = assetUrl(MODEL_DIR);
         env.backends.onnx.wasm.wasmPaths = assetUrl(WASM_DIR);
-        env.backends.onnx.wasm.numThreads = 1; // 扩展页里多线程需要 COOP/COEP，代价大
+        // 不要强制 numThreads：这条链路的 dist 只带 -threaded.jsep 版本的 wasm，
+        // 强制单线程会去找不存在的单线程文件；让它按环境自行决定。
 
         const options = {
             dtype: "q8",
