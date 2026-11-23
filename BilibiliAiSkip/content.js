@@ -628,7 +628,10 @@ async function transcribeLocally(bvid, cid) {
         });
 
         if (!response?.success || !response.data?.ok) {
-            styleLog("本地语音识别不可用: " + (response?.error || response?.data?.error || "未知原因"));
+            const reason = String(response?.error || response?.data?.error || "未知原因").replace(/\s+/g, " ").trim();
+            styleLog("本地语音识别不可用: " + reason);
+            // 失败原因显示在页面上，别只留在控制台
+            note("本地语音识别失败：" + (reason.length > 90 ? reason.slice(0, 90) + "…" : reason));
             return "";
         }
 
