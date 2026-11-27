@@ -112,6 +112,7 @@ check("content 调用审核结论识别", contentSrc.includes("detectSafetyVerdi
 check("识别到审核结论即跳出重试", /detectSafetyVerdict[\s\S]{0,600}?break;/.test(contentSrc));
 check("审核拦截后不再重问同一 cid", contentSrc.includes("blockedCids"));
 check("结论文案说明是审核拦截", contentSrc.includes("拒绝了这段字幕"));
+check("审核拦截后回退弹幕信号", /cloudBlocked[\s\S]{0,400}?detectByDanmaku\(/.test(contentSrc));
 
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));

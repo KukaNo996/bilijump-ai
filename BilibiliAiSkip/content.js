@@ -861,6 +861,8 @@ async function adRecognition(bvid, pvid, alive = () => true) {
             // 同一会话里这个视频的字幕已被审核拦过一次，重问只会得到同一个结论
             if (SKIP_STATE.blockedCids.has(String(cid))) {
                 styleLog(`CID: ${cid}, 已在本次会话内被安全审核拦截，跳过云端识别`);
+                const dm = await detectByDanmaku(cid, bvid, pvid);
+                if (dm) return dm;
                 return { ads: [], msg: "云端模型拒绝了这段字幕（内容安全审核），本次跳过云端识别" };
             }
 
@@ -931,6 +933,9 @@ async function adRecognition(bvid, pvid, alive = () => true) {
 
         if (!resultAD || !resultAD?.ads || !resultAD?.msg) {
             if (cloudBlocked) {
+                // 云端这条路被审核堵死了，但观众弹幕仍是有效信号，试一次再收手
+                const dm = await detectByDanmaku(cid, bvid, pvid);
+                if (dm) return dm;
                 return { ads: [], msg: `云端模型拒绝了这段字幕（${cloudBlocked}），本次未判定广告` };
             }
             return { ads: [], msg: resultAD ? "对象结构解析失败." : "内置模型与云端均未给出结论." };
