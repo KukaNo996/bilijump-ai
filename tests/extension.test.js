@@ -339,12 +339,6 @@ function testModels() {
     ], { config: lexicon.danmaku });
     check("无关键词不产出", noise.length, 0);
 
-    // 本地 ASR 的 chunk 会被拼成伪字幕再交给内置模型，格式必须能被解析
-    const asrChunk = { timestamp: [0, 11], text: " ask not what your country can do for you" };
-    const asrSubtitle = `${asrChunk.timestamp[0].toFixed(2)} --> ${asrChunk.timestamp[1].toFixed(2)}\n${asrChunk.text.trim()}`;
-    check("ASR 伪字幕可被解析", models.parseSubtitle(asrSubtitle).length, 1);
-    check("ASR 伪字幕时间正确", models.parseSubtitle(asrSubtitle)[0].to, 11);
-
     /* ---- 中文促销（日志里 STEPX 那类购机权益话术） ---- */
     const promo = models.detectCandidates(models.parseSubtitle([
         "0.00 --> 20.00", "这台手机的屏幕是六点七英寸的直屏。",
@@ -379,6 +373,41 @@ function testModels() {
     check("区间清洗：合并间隙可配", models.normalizeIntervals([
         { start_time: "10", end_time: "20" }, { start_time: "20.5", end_time: "30" }
     ], 100, { minDuration: 2, maxGap: 0 }).length, 2);
+
+    /* ---- 边界吸附：云端给的起止点落在句子中间 ---- */
+    const cueText = [
+        "10.00 --> 12.00", "这里是正片内容",
+        "12.00 --> 15.00", "现在下单立减两百元",
+        "15.00 --> 18.00", "还送价值八百元的礼包",
+        "18.00 --> 20.00", "我们继续看屏幕"
+    ].join("\n");
+    const cues = models.parseSubtitle(cueText);
+    check("字幕句数", cues.length, 4);
+
+    const snapped = models.snapIntervalsToCues(
+        [{ start_time: "12.40", end_time: "15.50" }], cues, { maxExtend: 4 });
+    check("吸附：起点回退到句首", snapped[0].start_time, "12.00");
+    check("吸附：终点前进到句尾", snapped[0].end_time, "18.00");
+
+    // 只在本句内扩：起点所在句的句首仍晚于「跨句」会吞掉的 10.00
+    checkTrue("吸附：不跨句吞上一句",
+        Number(snapped[0].start_time) >= 12, `start=${snapped[0].start_time}`);
+
+    // 超过 maxExtend 就不动（避免把整句正文拉进来）
+    const tight = models.snapIntervalsToCues(
+        [{ start_time: "12.40", end_time: "17.10" }], cues, { maxExtend: 0.2 });
+    check("吸附：超出上限不动", [tight[0].start_time, tight[0].end_time], ["12.40", "17.10"]);
+
+    // 落在字幕之外的时间点保持原样
+    const outside = models.snapIntervalsToCues(
+        [{ start_time: "900", end_time: "930" }], cues, { maxExtend: 4 });
+    check("吸附：无对应句保持原样", [outside[0].start_time, outside[0].end_time], ["900", "930"]);
+
+    check("吸附：非法时间原样返回",
+        models.snapIntervalsToCues([{ start_time: "...", end_time: "..." }], cues, {})[0].start_time, "...");
+    check("吸附：保留其它字段",
+        models.snapIntervalsToCues([{ start_time: "12.40", end_time: "15.50", product_name: "X" }], cues, {})[0].product_name,
+        "X");
 
     // CPU/GPU 应使用同一权重与同一数学形式
     const z = models.matvecCpu(decision.weights, new Array(decision.weights.length).fill(0), decision.bias);

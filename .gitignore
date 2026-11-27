@@ -10,5 +10,3 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
-
-# 本地语音识别资产改为随包内置；如需重装可跑 tools/fetch-asr-assets.mjs

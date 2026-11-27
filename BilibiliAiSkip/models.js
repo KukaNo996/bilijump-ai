@@ -10,8 +10,8 @@
  *      启动时用同一组权重与 CPU 结果做一次自校验，不一致就永久禁用 GPU，
  *      保证着色器写错也不会影响判定结果。
  *
- * 语音识别：浏览器端需要 Whisper 类 ONNX 权重（数十 MB），不随包分发。
- * transcribe() 会在缺失权重时明确抛错，调用方回退到云端 ASR。
+ * 只做字幕文本上的判定，不含语音识别：本地 Whisper 已移除（体积 66MB、中文精度不足），
+ * 无字幕视频走弹幕信号，仍无结果时由用户决定是否启用阿里云 ASR。
  */
 (function (root) {
     "use strict";
@@ -256,6 +256,42 @@
             merged.push(Object.assign({}, ad));
         }
         return merged;
+    }
+
+    /**
+     * 把广告区间吸附到「包含该时间点的那一句字幕」的首尾。
+     * 云端读的是文本而不是时间轴，起止点常落在句子中间（实测晚 1.6s）；
+     * 吸附只在本句内扩，绝不跨句——跨句扩张正是之前吞掉整段正片的原因。
+     */
+    function snapIntervalsToCues(ads, segments, options) {
+        if (!Array.isArray(ads) || !ads.length) return ads;
+        if (!Array.isArray(segments) || !segments.length) return ads;
+        const maxExtend = Number.isFinite(Number(options?.maxExtend)) ? Number(options.maxExtend) : 4;
+        if (maxExtend <= 0) return ads;
+
+        const cueAt = time => segments.find(seg => time >= seg.from - 0.001 && time <= seg.to + 0.001) || null;
+
+        return ads.map(ad => {
+            const start = toSecondsLoose(ad?.start_time);
+            const end = toSecondsLoose(ad?.end_time);
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return ad;
+
+            let nextStart = start;
+            let nextEnd = end;
+            const startCue = cueAt(start);
+            if (startCue && start - startCue.from <= maxExtend) nextStart = startCue.from;
+            const endCue = cueAt(end);
+            if (endCue && endCue.to - end <= maxExtend) nextEnd = endCue.to;
+            if (!(nextEnd > nextStart)) return ad;
+            // 没有任何吸附时原样返回，别把 "900" 改写成 "900.00"
+            if (nextStart === start && nextEnd === end) return ad;
+
+            // 小数点后两位，与原有时间字段格式保持一致
+            return Object.assign({}, ad, {
+                start_time: nextStart.toFixed(2),
+                end_time: nextEnd.toFixed(2)
+            });
+        });
     }
 
     /* --------------------------- 弹幕信号（无字幕兜底） --------------------------- */
@@ -780,22 +816,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return null;
     }
 
-    /** 语音识别：需要本地 ONNX 权重，未内置时明确返回不可用 */
-    async function transcribe(audioUrl) {
-        throw new Error("未内置语音模型权重（需自行放入 models/asr/ 后再启用）");
-    }
-
-    async function asrStatus() {
-        const gpu = await ensureGpu(true);
-        return {
-            webgpu: Boolean(gpu),
-            webgpuError: state.gpuError,
-            gpuVerified: state.gpuVerified,
-            weightsReady: false,
-            note: "WebGPU 通道可用；语音模型权重未内置，音频分析仍走云端 ASR"
-        };
-    }
-
     function status() {
         return {
             loaded: Boolean(state.lexicon && state.decision),
@@ -821,12 +841,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         parseDanmaku,
         detectAdsFromDanmaku,
         normalizeIntervals,
+        snapIntervalsToCues,
         sanitizeAdPayload,
         toSecondsLoose,
         matvecCpu,
         sigmoid,
-        transcribe,
-        asrStatus,
         status
     };
 

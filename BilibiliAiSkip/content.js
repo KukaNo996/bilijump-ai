@@ -604,56 +604,63 @@ async function detectByDanmaku(cid, bvid, pvid) {
     }
 }
 
-/**
- * 本地 Whisper 语音识别（需先执行 tools/fetch-asr-assets.mjs 装好资产）。
- * 返回带时间戳的伪字幕，交给后面的内置广告模型继续判定。
- */
-async function transcribeLocally(bvid, cid) {
+/* --------------------------- 识别结果本地缓存 --------------------------- */
+// 同一个视频反复打开（刷新、站内往返）不该每次都重新问云端。
+// 键用 bvid:pvid（拿到结果不必先请求 view 接口），值里带 cid 供纠错按钮使用。
+const RESULT_CACHE_KEY = "bilijump.resultCache";
+const RESULT_CACHE_VERSION = 4;
+const RESULT_CACHE_MAX = 300;
+const RESULT_CACHE_TTL_ADS = 14 * 24 * 3600 * 1000;   // 有广告的结论稳定，存久一点
+const RESULT_CACHE_TTL_EMPTY = 3 * 24 * 3600 * 1000;  // 无广告的结论更可能是漏判，短一些
+
+function cacheKeyOf(bvid, pvid) {
+    return `${bvid}:${pvid == null ? "" : pvid}`;
+}
+
+async function readCachedResult(bvid, pvid) {
     try {
-        const playResponse = await fetch(
-            `https://api.bilibili.com/x/player/wbi/playurl?bvid=${bvid}&cid=${cid}&qn=0&fnver=0&fnval=80&fourk=1`,
-            { credentials: "include" }
-        );
-        if (!playResponse.ok) return "";
-        const playData = await playResponse.json();
-        const audioUrl = playData?.data?.dash?.audio?.[0]?.base_url;
-        if (!audioUrl) return "";
+        const store = (await chrome.storage.local.get(RESULT_CACHE_KEY))[RESULT_CACHE_KEY] || {};
+        const entry = store[cacheKeyOf(bvid, pvid)];
+        if (!entry || entry.v !== RESULT_CACHE_VERSION) return null;
+        if (!entry.cid || !entry.data || !Array.isArray(entry.data.ads)) return null;
+        const ttl = entry.data.ads.length ? RESULT_CACHE_TTL_ADS : RESULT_CACHE_TTL_EMPTY;
+        if (!Number.isFinite(entry.ts) || Date.now() - entry.ts > ttl) return null;
+        return { cid: entry.cid, data: entry.data };
+    } catch {
+        return null;
+    }
+}
 
-        popups.others.push(showPopup("本地语音识别中（首次需加载模型，较慢）..."));
-
-        const response = await new Promise(resolve => {
-            chrome.runtime.sendMessage({ action: "asrTranscribe", audioUrl }, result => {
-                resolve(chrome.runtime.lastError
-                    ? { success: false, error: chrome.runtime.lastError.message }
-                    : result);
-            });
-        });
-
-        if (!response?.success || !response.data?.ok) {
-            const reason = String(response?.error || response?.data?.error || "未知原因").replace(/\s+/g, " ").trim();
-            styleLog("本地语音识别不可用: " + reason);
-            // 失败原因显示在页面上，别只留在控制台
-            note("本地语音识别失败：" + (reason.length > 90 ? reason.slice(0, 90) + "…" : reason));
-            return "";
+async function writeCachedResult(bvid, pvid, cid, data) {
+    if (!data || !Array.isArray(data.ads)) return;
+    try {
+        const store = Object.assign({}, (await chrome.storage.local.get(RESULT_CACHE_KEY))[RESULT_CACHE_KEY] || {});
+        store[cacheKeyOf(bvid, pvid)] = { v: RESULT_CACHE_VERSION, ts: Date.now(), cid, data };
+        const keys = Object.keys(store);
+        if (keys.length > RESULT_CACHE_MAX) {
+            keys.sort((a, b) => (store[a]?.ts || 0) - (store[b]?.ts || 0))
+                .slice(0, keys.length - RESULT_CACHE_MAX)
+                .forEach(key => delete store[key]);
         }
-
-        const chunks = Array.isArray(response.data.chunks) ? response.data.chunks : [];
-        if (!chunks.length) return String(response.data.text || "");
-
-        return chunks.map(chunk => {
-            const [from, to] = Array.isArray(chunk.timestamp) ? chunk.timestamp : [];
-            if (!Number.isFinite(from) || !Number.isFinite(to)) return "";
-            return `${from.toFixed(2)} --> ${to.toFixed(2)}\n${String(chunk.text || "").trim()}`;
-        }).filter(Boolean).join("\n");
-    } catch (error) {
-        styleLog("本地语音识别失败: " + error.message);
-        return "";
+        await chrome.storage.local.set({ [RESULT_CACHE_KEY]: store });
+    } catch {
+        // 缓存失败不影响主流程
     }
 }
 
 async function adRecognition(bvid, pvid, alive = () => true) {
     try {
         let resultS = await chrome.storage.local.get('subtitle');
+
+        // 命中本地缓存直接返回：省掉 view / player / 字幕 / 云端 四段往返
+        const cached = await readCachedResult(bvid, pvid);
+        if (cached) {
+            if (!alive()) return null;
+            styleLog(`本地缓存命中：${bvid}:${pvid ?? ""}（${cached.data.ads.length} 段）`);
+            popups.others.push(showPopup("使用本地缓存"));
+            correctButton(cached.cid, cached.data, bvid, pvid);
+            return cached.data;
+        }
 
         let response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {credentials: "include"});
         const videoData = await response.json(), aid = videoData.data.aid, cid = videoData.data.pages?.[pvid?pvid-1:pvid]?.cid || videoData.data.cid, title = videoData.data.title;
@@ -664,27 +671,42 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         //showPopup(`CID: ${cid}`);
         styleLog(`PID: ${pvid}`);
 
-        //todo 获取云端数据
-        let dbResults = await new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage({
-                action: "dbQuery",
-                url: settings.cfApiURL,
-                method: "POST",
-                cfApiKey: settings.cfApiKey,
-                body: {sql: "/* chrome */ SELECT data,model FROM bilijump WHERE cid = ? LIMIT 1;", params: [cid]}
-            }, response => {
-                if (response.success) {
-                    resolve(response?.data?.result?.[0]?.results?.[0]);
-                } else {
-                    styleLog("Background fetch error: " + response.error);
-                    reject(new Error(response.error));
+        // 共享库（Cloudflare）：没配置就整段跳过，省一次往返；
+        // 出错也只当没缓存，绝不能因为共享库挂了就中断识别
+        let dbResults = null;
+        if (settings.cfApiURL && settings.cfApiKey) {
+            dbResults = await new Promise(resolve => {
+                try {
+                    chrome.runtime.sendMessage({
+                        action: "dbQuery",
+                        url: settings.cfApiURL,
+                        method: "POST",
+                        cfApiKey: settings.cfApiKey,
+                        body: {sql: "/* chrome */ SELECT data,model FROM bilijump WHERE cid = ? LIMIT 1;", params: [cid]}
+                    }, response => {
+                        if (chrome.runtime.lastError) return resolve(null);
+                        if (!response?.success) {
+                            styleLog("共享库查询失败: " + (response?.error || "unknown"));
+                            return resolve(null);
+                        }
+                        resolve(response?.data?.result?.[0]?.results?.[0] || null);
+                    });
+                } catch (error) {
+                    styleLog("共享库查询异常: " + error.message);
+                    resolve(null);
                 }
             });
-        });
-        let tempAds = JSON.parse(dbResults?.data || "{}");
+        }
+        let tempAds = {};
+        try {
+            tempAds = JSON.parse(dbResults?.data || "{}");
+        } catch {
+            tempAds = {};
+        }
         if(dbResults?.data && tempAds?.ads && tempAds?.msg) {
             popups.others.push(showPopup(`使用云端数据, 模型: ${dbResults?.model}.`));
             correctButton(cid, tempAds, bvid, pvid);
+            writeCachedResult(bvid, pvid, cid, tempAds);
             return tempAds;
         }
 
@@ -703,15 +725,6 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         if (!subtitleUrl) {
             const danmakuResult = await detectByDanmaku(cid, bvid, pvid);
             if (danmakuResult) return danmakuResult;
-
-            // 弹幕没命中时，再试本地 Whisper（需自行装好模型资产）
-            if (settings.useLocalASR) {
-                const localText = await transcribeLocally(bvid, cid);
-                if (localText) {
-                    subtitle = localText;
-                    type = '本地语音';
-                }
-            }
         }
 
         if (subtitleUrl) {
@@ -829,6 +842,23 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         let cloudBlocked = null, cloudSkipped = "";
         if (!alive()) return null;
 
+        // 本地分析立刻开跑、与云端并行：云端失败或被拦时，兜底结果已经算好，不必再等一轮
+        const builtinPromise = settings.useBuiltinAdModel !== false && typeof BJSModels !== "undefined"
+            ? (async () => {
+                try {
+                    const video = document.querySelector("video");
+                    return await BJSModels.analyzeAds(subtitle, {
+                        duration: video?.duration || 0,
+                        threshold: settings.decisionThreshold,
+                        useWebGPU: settings.useWebGPU !== false
+                    });
+                } catch (error) {
+                    styleLog("内置模型不可用: " + error.message);
+                    return null;
+                }
+            })()
+            : Promise.resolve(null);
+
         // 云端跑不起来的三种原因：没配置 / 模型被禁 / 该视频字幕已被审核拦过
         if (settings.useCloudAI === false) {
             cloudSkipped = "已关闭云端识别";
@@ -914,24 +944,20 @@ async function adRecognition(bvid, pvid, alive = () => true) {
             }
         }
 
-        // ② 云端没给出结论时，用内置模型兜底：词表 + 微型决策模型，离线可用、无需 Key
-        if (!resultAD && settings.useBuiltinAdModel !== false && typeof BJSModels !== "undefined") {
-            try {
-                const video = document.querySelector("video");
-                const builtin = await BJSModels.analyzeAds(subtitle, {
-                    duration: video?.duration || 0,
-                    threshold: settings.decisionThreshold,
-                    useWebGPU: settings.useWebGPU !== false
-                });
-                if (builtin) {
-                    resultAD = builtin;
-                    usedModel = builtin.model;
-                    popups.others.push(showPopup(`内置模型：${builtin.ads.length} 段，置信度 ${builtin.confidence}`));
-                } else {
-                    styleLog("内置模型未发现广告段落");
+        // ② 云端没给出结论，或云端说「没广告」但本地明确命中时，用内置模型兜底
+        if (!resultAD || !resultAD.ads.length) {
+            const builtin = await builtinPromise;
+            const cloudSaidNone = Boolean(resultAD);
+            // 云端说没有、本地说有：只在本地置信度够高时才推翻云端，避免词表误报
+            if (builtin && (!cloudSaidNone || Number(builtin.confidence) >= 0.6)) {
+                if (cloudSaidNone) {
+                    styleLog(`云端判无广告，本地命中 ${builtin.ads.length} 段（置信度 ${builtin.confidence}），采用本地结果`);
                 }
-            } catch (error) {
-                styleLog("内置模型不可用: " + error.message);
+                resultAD = builtin;
+                usedModel = builtin.model;
+                popups.others.push(showPopup(`内置模型：${builtin.ads.length} 段，置信度 ${builtin.confidence}`));
+            } else if (!cloudSaidNone && settings.useBuiltinAdModel !== false && typeof BJSModels !== "undefined") {
+                styleLog("内置模型未发现广告段落");
             }
         }
 
@@ -950,6 +976,15 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         // 会话已被新页面取代时，不要再写库、不要动 UI
         if (!alive()) return null;
 
+        // 云端读的是文本不是时间轴，起止点常落在句子中间；吸附到句边界（只在同一句内扩，不跨句）
+        if (resultAD.ads.length && typeof BJSModels !== "undefined" && BJSModels.snapIntervalsToCues) {
+            const cues = BJSModels.parseSubtitle(subtitle);
+            if (cues.length) {
+                const snapped = BJSModels.snapIntervalsToCues(resultAD.ads, cues, { maxExtend: 4 });
+                if (Array.isArray(snapped)) resultAD = Object.assign({}, resultAD, { ads: snapped });
+            }
+        }
+
         styleLog(`CID: ${cid}, data: ${JSON.stringify(resultAD)}`);
         const cachedSubtitle = type === '音频' ? subtitle : '';
         chrome.runtime.sendMessage({
@@ -961,6 +996,7 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         });
 
         correctButton(cid, resultAD, bvid, pvid);
+        writeCachedResult(bvid, pvid, cid, resultAD);
         resultS = await chrome.storage.local.get('subtitle');
         if (resultS?.subtitle?.hasOwnProperty(cid)) {
             delete resultS.subtitle[cid];

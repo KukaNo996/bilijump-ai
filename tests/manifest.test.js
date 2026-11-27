@@ -82,29 +82,17 @@ check("后端使用 response_format",
 check("无字幕提示不再写成配置报错", !contentSource.includes("Please set aliApiKey"));
 check("无字幕提示说明原因", contentSource.includes("该视频没有字幕"));
 
-console.log("\n[本地语音] 实验功能接线");
+console.log("\n[本地语音] 已移除（体积 66MB、中文精度不足）");
 const bgSource = fs.readFileSync(path.join(EXT, "background.js"), "utf8");
-check("offscreen 页面存在", exists("offscreen.html") && exists("offscreen.js"));
-check("声明 offscreen 权限", manifest.permissions.includes("offscreen"));
-check("background 创建 offscreen 文档", bgSource.includes("chrome.offscreen.createDocument"));
-check("background 转发识别请求", bgSource.includes("asrTranscribe"));
-check("content 侧有本地识别入口", contentSource.includes("transcribeLocally"));
-check("默认开启（资产随包内置）", /useLocalASR:\s*true/.test(fs.readFileSync(path.join(EXT, "settings.js"), "utf8")));
-check("popup 有开关", fs.readFileSync(path.join(EXT, "popup.html"), "utf8").includes('id="useLocalASR"'));
-// 资产必须随包分发：扩展加载后即可离线识别，不需要额外下载步骤
-check("运行时已内置", exists("vendor/transformers.min.js") && exists("vendor/ort-wasm-simd-threaded.jsep.wasm"));
-// ort 是 .mjs 加载器 + .wasm 本体成对加载，缺一个就报 Failed to fetch ... .mjs
-check("wasm 加载器成对存在", exists("vendor/ort-wasm-simd-threaded.jsep.mjs"));
-// MV3 扩展页默认 CSP 不允许编译 WebAssembly，必须显式放开
-check("CSP 允许 wasm",
-    (manifest.content_security_policy?.extension_pages || "").includes("wasm-unsafe-eval"),
-    manifest.content_security_policy?.extension_pages || "未设置");
-check("模型权重已内置", exists("models/asr/whisper-tiny/onnx/encoder_model_quantized.onnx")
-    && exists("models/asr/whisper-tiny/onnx/decoder_model_merged_quantized.onnx"));
-check("分词文件齐全", exists("models/asr/whisper-tiny/tokenizer.json")
-    && exists("models/asr/whisper-tiny/tokenizer_config.json")
-    && exists("models/asr/whisper-tiny/vocab.json"));
-check("提供资产修复脚本", fs.existsSync(path.join(__dirname, "..", "tools", "fetch-asr-assets.mjs")));
+check("offscreen 文件已删除", !exists("offscreen.html") && !exists("offscreen.js"));
+check("不再声明 offscreen 权限", !manifest.permissions.includes("offscreen"));
+check("background 不再创建 offscreen", !bgSource.includes("chrome.offscreen"));
+check("不再有 ASR 转发入口", !bgSource.includes("asrTranscribe") && !contentSource.includes("transcribeLocally"));
+check("设置项已移除", !fs.readFileSync(path.join(EXT, "settings.js"), "utf8").includes("useLocalASR"));
+check("popup 开关已移除", !fs.readFileSync(path.join(EXT, "popup.html"), "utf8").includes('id="useLocalASR"'));
+check("推理库资产已删除", !exists("vendor/transformers.min.js"));
+check("语音权重已删除", !exists("models/asr/whisper-tiny"));
+check("不再需要 wasm CSP", !manifest.content_security_policy);
 
 // 云端把「内容安全审核结论」当正文返回时，不能当解析失败去重试（三次都是同一结论，纯浪费）
 const contentSrc = fs.readFileSync(path.join(EXT, "content.js"), "utf8");
