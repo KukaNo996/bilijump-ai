@@ -374,7 +374,31 @@ function testModels() {
         { start_time: "10", end_time: "20" }, { start_time: "20.5", end_time: "30" }
     ], 100, { minDuration: 2, maxGap: 0 }).length, 2);
 
-    /* ---- 边界吸附：云端给的起止点落在句子中间 ---- */
+    /* ---- 字幕轨选取：不能盲取 subtitles[0] ---- */
+    check("轨选取：null 输入", models.pickSubtitleTrack(null), null);
+    check("轨选取：空数组", models.pickSubtitleTrack([]), null);
+    check("轨选取：全部没有 URL",
+        models.pickSubtitleTrack([{ lan: "zh-CN" }, { lan: "ai-zh" }]), null);
+
+    const tracks = [
+        { lan: "en", lan_doc: "English", subtitle_url: "//a/en.json" },
+        { lan: "ai-zh", lan_doc: "中文（自动生成）", subtitle_url: "//a/ai.json" },
+        { lan: "zh-CN", lan_doc: "中文（简体）", subtitle_url: "//a/zh.json" }
+    ];
+    check("轨选取：人工中文优先于 AI 与英文", models.pickSubtitleTrack(tracks)?.url, "//a/zh.json");
+    check("轨选取：没有人工中文时选 AI",
+        models.pickSubtitleTrack([tracks[0], tracks[1]])?.url, "//a/ai.json");
+    check("轨选取：只有英文就用英文", models.pickSubtitleTrack([tracks[0]])?.url, "//a/en.json");
+    check("轨选取：跳过没有 URL 的首轨",
+        models.pickSubtitleTrack([{ lan: "zh-CN", subtitle_url: "" }, tracks[0]])?.url, "//a/en.json");
+    check("轨选取：报告轨数与语言", (() => {
+        const picked = models.pickSubtitleTrack(tracks);
+        return `${picked.total}/${picked.lan}`;
+    })(), "3/zh-CN");
+    check("轨选取：兼容 camelCase 字段",
+        models.pickSubtitleTrack([{ lan: "ai-zh", subtitleUrl: "//a/ai.json" }])?.url, "//a/ai.json");
+
+
     const cueText = [
         "10.00 --> 12.00", "这里是正片内容",
         "12.00 --> 15.00", "现在下单立减两百元",

@@ -20,7 +20,12 @@ const exists = relative => fs.existsSync(path.join(EXT, relative));
 
 console.log("\n[清单] manifest.json");
 check("Manifest V3", manifest.manifest_version === 3);
-check("版本号已升级", /^2\.4\./.test(manifest.version), manifest.version);
+const versionParts = manifest.version.split(".").map(Number);
+check("版本号为 semver 且不低于 2.4.2",
+    versionParts.length === 3 && versionParts.every(Number.isFinite) &&
+    (versionParts[0] > 2 || (versionParts[0] === 2 &&
+        (versionParts[1] > 4 || (versionParts[1] === 4 && versionParts[2] >= 2)))),
+    manifest.version);
 check("本地端点写入 host_permissions", manifest.host_permissions.includes("http://127.0.0.1/*"),
     JSON.stringify(manifest.host_permissions));
 check("localhost 写入 host_permissions", manifest.host_permissions.includes("http://localhost/*"));
@@ -107,6 +112,19 @@ const danmakuLast = contentSrc.indexOf("最后试一次弹幕信号");
 check("云端优先于本地分析", cloudFirst > -1 && cloudFirst < localFallback);
 check("本地分析先于弹幕", localFallback < danmakuLast);
 check("云端不可用时说明原因并改用本地", contentSrc.includes("cloudSkipped"));
+
+console.log("\n[字幕] 自动生成字幕与多轨选取");
+check("使用多轨选取而非 subtitles[0]",
+    (contentSource.match(/pickSubtitleTrack/g) || []).length >= 2);
+check("不再直接取首轨赋值",
+    !/const subtitleUrl = playerData\.data\?\.subtitle\?\.subtitles\?\.\[0\]/.test(contentSource));
+check("有触发自动生成字幕的入口", contentSource.includes("triggerAiSubtitle"));
+check("定位播放器字幕按钮", contentSource.includes("bpx-player-ctrl-subtitle-result"));
+check("按文案找「自动生成」选项", contentSource.includes("findAutoSubtitleItem"));
+check("hover 展开面板后再点击", /hoverAndClick[\s\S]{0,400}?mouseenter/.test(contentSource));
+check("字幕 URL 协议归一", contentSource.includes("normalizeSubtitleUrl"));
+check("设置项存在", /useAiSubtitle:\s*true/.test(fs.readFileSync(path.join(EXT, "settings.js"), "utf8")));
+check("popup 有开关", fs.readFileSync(path.join(EXT, "popup.html"), "utf8").includes('id="useAiSubtitle"'));
 
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));

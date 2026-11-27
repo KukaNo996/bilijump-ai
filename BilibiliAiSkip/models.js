@@ -259,7 +259,36 @@
     }
 
     /**
-     * 把广告区间吸附到「包含该时间点的那一句字幕」的首尾。
+     * 从播放器接口返回的字幕轨里挑一条最合适的。
+     * 原来直接取 subtitles[0]：第一轨是英文、或第一条没带 URL 时，真正可用的中文轨就被丢掉了。
+     * 优先级：人工中文 > AI/自动生成 > 其它中文 > 英文 > 其余。
+     */
+    function pickSubtitleTrack(subtitles) {
+        if (!Array.isArray(subtitles)) return null;
+        const urlOf = item => String(item?.subtitle_url || item?.subtitleUrl || "");
+        const usable = subtitles.filter(item => urlOf(item).trim());
+        if (!usable.length) return null;
+
+        const rank = item => {
+            const lan = String(item?.lan || "").trim().toLowerCase();
+            const doc = String(item?.lan_doc || "");
+            if (/自动生成|ai\s*字幕/i.test(doc) || lan.startsWith("ai")) return 1;
+            if (lan === "zh-cn" || lan === "zh-hans" || lan === "zh") return 0;
+            if (lan.startsWith("zh")) return 2;
+            if (lan.startsWith("en")) return 3;
+            return 4;
+        };
+
+        const picked = usable.slice().sort((a, b) => rank(a) - rank(b))[0];
+        return {
+            url: urlOf(picked).trim(),
+            lan: String(picked.lan || ""),
+            lan_doc: String(picked.lan_doc || ""),
+            total: usable.length
+        };
+    }
+
+    /**
      * 云端读的是文本而不是时间轴，起止点常落在句子中间（实测晚 1.6s）；
      * 吸附只在本句内扩，绝不跨句——跨句扩张正是之前吞掉整段正片的原因。
      */
@@ -842,6 +871,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         detectAdsFromDanmaku,
         normalizeIntervals,
         snapIntervalsToCues,
+        pickSubtitleTrack,
         sanitizeAdPayload,
         toSecondsLoose,
         matvecCpu,

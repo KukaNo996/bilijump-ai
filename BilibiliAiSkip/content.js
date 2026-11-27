@@ -648,6 +648,101 @@ async function writeCachedResult(bvid, pvid, cid, data) {
     }
 }
 
+/* --------------------------- B 站自带「自动生成字幕」 --------------------------- */
+// 部分视频接口不返回任何字幕轨，但播放器里能选「中文（自动生成）」。
+// 选中后接口才会给出 subtitle_url，所以流程是：进面板 → 选中 AI 轨 → 轮询接口。
+// 任何一步失败都安静返回空串，交给后面的弹幕 / 音频链路。
+
+function normalizeSubtitleUrl(url) {
+    const value = String(url || "").trim();
+    if (!value) return "";
+    if (value.startsWith("//")) return `https:${value}`;
+    if (/^https?:\/\//i.test(value)) return value;
+    return `https:${value}`;
+}
+
+async function fetchSubtitleTracks(aid, cid) {
+    const response = await fetch(`https://api.bilibili.com/x/player/wbi/v2?aid=${aid}&cid=${cid}`, {
+        credentials: "include"
+    });
+    const data = await response.json();
+    return data?.data?.subtitle?.subtitles;
+}
+
+function findSubtitleButton() {
+    for (const selector of [".bpx-player-ctrl-subtitle-result", ".bpx-player-ctrl-subtitle", '[data-i18n="subtitles"]']) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+    }
+    // 兜底：播放器容器里文案为「字幕」的叶子节点
+    const container = document.querySelector(".bpx-player-container");
+    if (!container) return null;
+    return Array.from(container.querySelectorAll("[data-i18n], span, div"))
+        .find(element => element.children.length === 0 && (element.textContent || "").trim() === "字幕") || null;
+}
+
+/** 面板是 hover 展开的，只 click 常常无效；先派发鼠标移动事件再点 */
+function hoverAndClick(element) {
+    for (const type of ["mouseenter", "mouseover", "mousemove"]) {
+        element.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+    }
+    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    element.click();
+}
+
+function findAutoSubtitleItem() {
+    const scope = document.querySelector(".bpx-player-container") || document;
+    const pattern = /(自动生成|AI\s*字幕)/i;
+    const hits = Array.from(scope.querySelectorAll("li, div, span, button")).filter(element => {
+        const text = (element.textContent || "").trim();
+        if (!text || text.length > 20 || !pattern.test(text)) return false;
+        // 排除父级容器：子元素里还有同样命中的，说明它不是选项本身
+        return !Array.from(element.children).some(child => pattern.test(child.textContent || ""));
+    });
+    return hits[0] || null;
+}
+
+async function triggerAiSubtitle(aid, cid) {
+    const button = findSubtitleButton();
+    if (!button) {
+        styleLog("未找到播放器字幕按钮，跳过自动生成字幕");
+        return "";
+    }
+
+    try {
+        popups.others.push(showPopup("尝试开启 B 站自动生成字幕..."));
+        hoverAndClick(button);
+        await sleep(600);
+
+        const item = findAutoSubtitleItem();
+        if (!item) {
+            // 未登录、或该视频本就没有 AI 轨时不会有这一项
+            styleLog("字幕面板里没有「自动生成」选项，跳过");
+            return "";
+        }
+        styleLog(`选中自动生成字幕：${(item.textContent || "").trim()}`);
+        hoverAndClick(item);
+
+        // 选中后 B 站才去取字幕文件，接口里的 subtitle_url 要等一会儿才出现
+        for (let i = 0; i < 6; i++) {
+            await sleep(1200);
+            const track = typeof BJSModels !== "undefined" && BJSModels.pickSubtitleTrack
+                ? BJSModels.pickSubtitleTrack(await fetchSubtitleTracks(aid, cid))
+                : null;
+            if (track?.url) {
+                styleLog(`自动生成字幕就绪：${track.lan_doc || track.lan}（第 ${i + 1} 次探测）`);
+                return track.url;
+            }
+        }
+        styleLog("自动生成字幕未在时限内就绪");
+        return "";
+    } catch (error) {
+        styleLog("自动生成字幕尝试失败: " + error.message);
+        return "";
+    }
+}
+
 async function adRecognition(bvid, pvid, alive = () => true) {
     try {
         let resultS = await chrome.storage.local.get('subtitle');
@@ -715,10 +810,19 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         response = await fetch(`https://api.bilibili.com/x/player/wbi/v2?aid=${aid}&cid=${cid}`, {
             credentials: "include"
         });
-        const playerData = await response.json(), subtitleUrl = playerData.data?.subtitle?.subtitles?.[0]?.subtitle_url;
-
+        const playerData = await response.json();
+        const tracks = playerData.data?.subtitle?.subtitles;
+        // 不再盲取 subtitles[0]：第一轨可能是英文或没带 URL，真正的中文轨在后面
+        let subtitleUrl = (typeof BJSModels !== "undefined" && BJSModels.pickSubtitleTrack)
+            ? (BJSModels.pickSubtitleTrack(tracks)?.url || "")
+            : (tracks?.[0]?.subtitle_url || "");
 
         let subtitle = "", type;
+
+        // 接口没给字幕时，试一次「播放器自带的自动生成字幕」：进面板选 AI 轨后接口才会给出 URL
+        if (!subtitleUrl && settings.useAiSubtitle !== false) {
+            subtitleUrl = await triggerAiSubtitle(aid, cid);
+        }
 
         // 无字幕时先用弹幕信号兜底：零成本、不需要 Key、不需要下载模型。
         // 弹幕里出现"广告/恰饭/软广"的位置通常与广告段对齐，命中就直接返回。
@@ -730,7 +834,7 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         if (subtitleUrl) {
             type = '字幕';
             popups.others.push(showPopup("使用字幕分析."));
-            response = await fetch(`https:${subtitleUrl}`);
+            response = await fetch(normalizeSubtitleUrl(subtitleUrl));
             const subtitleData = await response.json();
 
             subtitleData.body.forEach(item => {
@@ -1019,9 +1123,17 @@ async function getReRecognitionSubtitle(aid, cid, title) {
     if (!playerResponse.ok) throw new Error(`获取视频字幕失败: ${playerResponse.status}`);
 
     const playerData = await playerResponse.json();
-    const subtitleUrl = playerData.data?.subtitle?.subtitles?.[0]?.subtitle_url;
+    let subtitleUrl = typeof BJSModels !== "undefined" && BJSModels.pickSubtitleTrack
+        ? (BJSModels.pickSubtitleTrack(playerData.data?.subtitle?.subtitles)?.url || "")
+        : (playerData.data?.subtitle?.subtitles?.[0]?.subtitle_url || "");
+
+    // 重新识别同样给自动生成字幕一次机会
+    if (!subtitleUrl && settings.useAiSubtitle !== false) {
+        subtitleUrl = await triggerAiSubtitle(aid, cid);
+    }
+
     if (subtitleUrl) {
-        const resolvedUrl = subtitleUrl.startsWith('//') ? `https:${subtitleUrl}` : subtitleUrl;
+        const resolvedUrl = normalizeSubtitleUrl(subtitleUrl);
         const subtitleResponse = await fetch(resolvedUrl);
         if (!subtitleResponse.ok) throw new Error(`下载视频字幕失败: ${subtitleResponse.status}`);
         const subtitleData = await subtitleResponse.json();
