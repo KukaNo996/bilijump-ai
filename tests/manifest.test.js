@@ -106,6 +106,13 @@ check("分词文件齐全", exists("models/asr/whisper-tiny/tokenizer.json")
     && exists("models/asr/whisper-tiny/vocab.json"));
 check("提供资产修复脚本", fs.existsSync(path.join(__dirname, "..", "tools", "fetch-asr-assets.mjs")));
 
+// 云端把「内容安全审核结论」当正文返回时，不能当解析失败去重试（三次都是同一结论，纯浪费）
+const contentSrc = fs.readFileSync(path.join(EXT, "content.js"), "utf8");
+check("content 调用审核结论识别", contentSrc.includes("detectSafetyVerdict"));
+check("识别到审核结论即跳出重试", /detectSafetyVerdict[\s\S]{0,600}?break;/.test(contentSrc));
+check("审核拦截后不再重问同一 cid", contentSrc.includes("blockedCids"));
+check("结论文案说明是审核拦截", contentSrc.includes("拒绝了这段字幕"));
+
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));
 check("settings.js 先于 popup.js", order[0] > -1 && order[0] < order[2]);

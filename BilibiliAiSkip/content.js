@@ -14,7 +14,9 @@ const SKIP_STATE = {
     videoHandlers: [],
     href: location.href,
     activeKey: "",
-    retry: { key: "", count: 0 }
+    retry: { key: "", count: 0 },
+    // 被云端内容安全审核拦下的 cid：同一会话内不再重问，避免每次刷新都烧三次调用
+    blockedCids: new Set()
 };
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -824,6 +826,7 @@ async function adRecognition(bvid, pvid, alive = () => true) {
 
         // ① 内置广告识别模型：本地词表 + 微型决策模型，离线可用、无需 API Key
         let resultAD = null, usedModel = "", total_tokens = 0;
+        let cloudBlocked = null;
         if (!alive()) return null;
         if (settings.useBuiltinAdModel !== false && typeof BJSModels !== "undefined") {
             try {
@@ -853,6 +856,12 @@ async function adRecognition(bvid, pvid, alive = () => true) {
             if (banModels.includes(settings.apiModel)) {
                 showPopup(`禁用 ${settings.apiModel} 模型，效果太差`);
                 return { ads: [], msg: `请使用其他模型` };
+            }
+
+            // 同一会话里这个视频的字幕已被审核拦过一次，重问只会得到同一个结论
+            if (SKIP_STATE.blockedCids.has(String(cid))) {
+                styleLog(`CID: ${cid}, 已在本次会话内被安全审核拦截，跳过云端识别`);
+                return { ads: [], msg: "云端模型拒绝了这段字幕（内容安全审核），本次跳过云端识别" };
             }
 
             // 必须用局部引用关自己那张卡片：popups.ai 是全局单槽，
@@ -890,6 +899,18 @@ async function adRecognition(bvid, pvid, alive = () => true) {
                         continue;
                     }
 
+                    // 审核结论不是广告判定：同一段字幕重试只会得到同一个结论，直接收手
+                    const safety = typeof BJSModels !== "undefined" && BJSModels.detectSafetyVerdict
+                        ? BJSModels.detectSafetyVerdict(aiResponse)
+                        : null;
+                    if (safety) {
+                        cloudBlocked = safety.categories || safety.status || "内容安全审核";
+                        SKIP_STATE.blockedCids.add(String(cid));
+                        // 只写日志：结论文案由下方统一返回，避免同一原因连弹两次
+                        styleLog(`CID: ${cid}, 云端返回安全审核结论（${cloudBlocked}），已停止重试`);
+                        break;
+                    }
+
                     // 模型可能把推理过程一起吐出来，走带括号配对的提取器，而不是裸 JSON.parse
                     resultAD = typeof BJSModels !== "undefined"
                         ? BJSModels.extractJson(aiResponse)
@@ -909,6 +930,9 @@ async function adRecognition(bvid, pvid, alive = () => true) {
         }
 
         if (!resultAD || !resultAD?.ads || !resultAD?.msg) {
+            if (cloudBlocked) {
+                return { ads: [], msg: `云端模型拒绝了这段字幕（${cloudBlocked}），本次未判定广告` };
+            }
             return { ads: [], msg: resultAD ? "对象结构解析失败." : "内置模型与云端均未给出结论." };
         }
         // 会话已被新页面取代时，不要再写库、不要动 UI

@@ -690,6 +690,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     /**
+     * 识别「内容安全审核结论」被当作正文返回来。
+     * 实测网关/上游在审核不通过时会把审核结果当成 assistant 消息内容：
+     *   {"User Safety":"unsafe","Response Safety":"safe","Safety Categories":"Violence"}
+     * 这不是解析失败：同一段字幕重试只会得到同样的结论，必须立刻收手，
+     * 否则三次重试就是三次纯浪费（每次都要等一个完整的往返）。
+     */
+    function detectSafetyVerdict(raw) {
+        if (raw == null) return null;
+        let text = String(raw).trim();
+        if (!text) return null;
+        const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fence && fence[1]) text = fence[1].trim();
+
+        const value = tryJson(text);
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+        const flatKeys = Object.keys(value).map(key => key.toLowerCase().replace(/[\s_-]/g, ""));
+        const signature = ["usersafety", "responsesafety", "safetycategories", "safetyrating"];
+        if (!flatKeys.some(key => signature.includes(key))) return null;
+
+        const pick = (...names) => {
+            for (const name of names) {
+                if (value[name] != null && value[name] !== "") return value[name];
+            }
+            return "";
+        };
+        const status = String(pick("User Safety", "user_safety", "userSafety") || "").toLowerCase();
+        const categories = pick("Safety Categories", "safety_categories", "safetyCategories");
+
+        return {
+            // 即使结论是 safe，它也不是广告判定结果，同样不该重试
+            blocked: status !== "safe",
+            status: status || "unknown",
+            categories: Array.isArray(categories) ? categories.join(", ") : String(categories || ""),
+            raw: text.slice(0, 200)
+        };
+    }
+
+    /**
      * 从大模型输出里提取 JSON 对象。
      * 实际观测到有些模型会把推理过程直接吐出来（"我们需要回答用户：…"），
      * 甚至中间夹一段带 [...] 的伪 JSON，所以不能只用 ```json 围栏或 JSON.parse。
@@ -774,6 +813,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         decide,
         decideBatch,
         extractJson,
+        detectSafetyVerdict,
         extractFeatures,
         detectCandidates,
         parseSubtitle,

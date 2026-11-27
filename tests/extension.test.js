@@ -286,6 +286,26 @@ function testModels() {
     check("空 ads 属于合法的未识别",
         models.extractJson("{\"ads\":[],\"msg\":\"未识别到广告\"}")?.msg, "未识别到广告");
 
+    /* ---- 内容安全审核结论（网关把审核结果当正文返回） ---- */
+    // 取自日志原文：三次重试都是同一个结论，必须一眼认出来并停止重试
+    const safetyViolence = models.detectSafetyVerdict(
+        "{\"User Safety\": \"unsafe\", \"Response Safety\": \"safe\", \"Safety Categories\": \"Violence\"}");
+    check("审核结论：识别为拦截", safetyViolence?.blocked, true);
+    check("审核结论：类别", safetyViolence?.categories, "Violence");
+    check("审核结论：另一类别", models.detectSafetyVerdict(
+        "{\"User Safety\": \"unsafe\", \"Response Safety\": \"safe\", \"Safety Categories\": \"Hate/Identity Hate\"}")?.categories,
+        "Hate/Identity Hate");
+    check("审核结论：safe 也要识别（同样不是广告判定）",
+        models.detectSafetyVerdict("{\"User Safety\": \"safe\", \"Response Safety\": \"safe\"}")?.blocked, false);
+    check("审核结论：仍算命中签名", Boolean(models.detectSafetyVerdict(
+        "{\"User Safety\": \"safe\", \"Response Safety\": \"safe\"}")), true);
+    check("审核结论：围栏包裹也能认",
+        models.detectSafetyVerdict("```json\n{\"User Safety\":\"unsafe\",\"Safety Categories\":\"Violence\"}\n```")?.blocked,
+        true);
+    check("审核结论：不误伤正常广告结果", models.detectSafetyVerdict(
+        "{\"ads\":[{\"start_time\":\"22.14\",\"end_time\":\"33.68\"}],\"msg\":\"识别到广告\"}"), null);
+    check("审核结论：不误伤推理文本", models.detectSafetyVerdict("我们需要回答用户：分析字幕"), null);
+
     /* ---- 弹幕信号（无字幕兜底） ---- */
     const danmakuXml = "<i><chatserver>chat.bilibili.com</chatserver>"
         + "<d p=\"12.50,1,25,16777215,1793722678,0,abc,1\">这个屏幕素质不错</d>"
