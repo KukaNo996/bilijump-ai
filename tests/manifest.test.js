@@ -112,7 +112,13 @@ check("content 调用审核结论识别", contentSrc.includes("detectSafetyVerdi
 check("识别到审核结论即跳出重试", /detectSafetyVerdict[\s\S]{0,600}?break;/.test(contentSrc));
 check("审核拦截后不再重问同一 cid", contentSrc.includes("blockedCids"));
 check("结论文案说明是审核拦截", contentSrc.includes("拒绝了这段字幕"));
-check("审核拦截后回退弹幕信号", /cloudBlocked[\s\S]{0,400}?detectByDanmaku\(/.test(contentSrc));
+// 顺序契约：云端优先 → 本地兜底 → 弹幕最后
+const cloudFirst = contentSrc.indexOf("云端优先");
+const localFallback = contentSrc.indexOf("用内置模型兜底");
+const danmakuLast = contentSrc.indexOf("最后试一次弹幕信号");
+check("云端优先于本地分析", cloudFirst > -1 && cloudFirst < localFallback);
+check("本地分析先于弹幕", localFallback < danmakuLast);
+check("云端不可用时说明原因并改用本地", contentSrc.includes("cloudSkipped"));
 
 console.log("\n[页面] popup.html 脚本加载顺序");const html = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
 const order = ["settings.js", "models.js", "popup.js"].map(file => html.indexOf(`src="${file}"`));

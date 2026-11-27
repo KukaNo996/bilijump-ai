@@ -824,47 +824,30 @@ async function adRecognition(bvid, pvid, alive = () => true) {
 
 ` + subtitle;
 
-        // ① 内置广告识别模型：本地词表 + 微型决策模型，离线可用、无需 API Key
+        // ① 云端优先：大模型判断最准，配了就用它先跑
         let resultAD = null, usedModel = "", total_tokens = 0;
-        let cloudBlocked = null;
+        let cloudBlocked = null, cloudSkipped = "";
         if (!alive()) return null;
-        if (settings.useBuiltinAdModel !== false && typeof BJSModels !== "undefined") {
-            try {
-                const video = document.querySelector("video");
-                resultAD = await BJSModels.analyzeAds(subtitle, {
-                    duration: video?.duration || 0,
-                    threshold: settings.decisionThreshold,
-                    useWebGPU: settings.useWebGPU !== false
-                });
-                if (resultAD) {
-                    usedModel = resultAD.model;
-                    popups.others.push(showPopup(`内置模型：${resultAD.ads.length} 段，置信度 ${resultAD.confidence}`));
-                }
-            } catch (error) {
-                styleLog("内置模型不可用，回退云端: " + error.message);
-            }
-        }
 
-        // ② 内置模型没有把握时才回退云端大模型
-        if (!resultAD && settings.useCloudAI !== false) {
+        // 云端跑不起来的三种原因：没配置 / 模型被禁 / 该视频字幕已被审核拦过
+        if (settings.useCloudAI === false) {
+            cloudSkipped = "已关闭云端识别";
+        } else {
             const missing = ["apiKey", "apiURL"].filter(key => !settings[key]);
             if (!settings.apiModel && !isLocalAPI()) missing.push("apiModel");
             if (missing.length) {
-                note(`Please set ${missing[0]} in extension settings`);
-                return { ads: [], msg: `Please set ${missing[0]}` };
+                cloudSkipped = `未配置 ${missing[0]}`;
+            } else if (banModels.includes(settings.apiModel)) {
+                cloudSkipped = `${settings.apiModel} 在禁用名单`;
+            } else if (SKIP_STATE.blockedCids.has(String(cid))) {
+                // 同一 session 里重问只会拿到同一个审核结论
+                cloudBlocked = "内容安全审核";
             }
-            if (banModels.includes(settings.apiModel)) {
-                showPopup(`禁用 ${settings.apiModel} 模型，效果太差`);
-                return { ads: [], msg: `请使用其他模型` };
-            }
+            if (cloudSkipped) styleLog(`云端跳过：${cloudSkipped}，改用本地分析`);
+            if (cloudBlocked) styleLog(`CID: ${cid}, 本次会话内已被审核拦截，改用本地分析`);
+        }
 
-            // 同一会话里这个视频的字幕已被审核拦过一次，重问只会得到同一个结论
-            if (SKIP_STATE.blockedCids.has(String(cid))) {
-                styleLog(`CID: ${cid}, 已在本次会话内被安全审核拦截，跳过云端识别`);
-                const dm = await detectByDanmaku(cid, bvid, pvid);
-                if (dm) return dm;
-                return { ads: [], msg: "云端模型拒绝了这段字幕（内容安全审核），本次跳过云端识别" };
-            }
+        if (!cloudSkipped && !cloudBlocked) {
 
             // 必须用局部引用关自己那张卡片：popups.ai 是全局单槽，
             // 两个会话并发时互相覆盖，会导致关闭到别人的卡片、自己的卡片永久残留
@@ -883,7 +866,7 @@ async function adRecognition(bvid, pvid, alive = () => true) {
             try {
                 let data, aiResponse;
                 const startedAt = Date.now();
-                for (let i = 0; i < 3 && (!resultAD?.ads || !resultAD?.msg); i++) {
+                for (let i = 0; i < 3 && !resultAD; i++) {
                     if (!alive()) break;
                     // 已经折腾太久就收手，避免三连超时把播放页拖住好几分钟
                     if (Date.now() - startedAt > ANALYSIS_DEADLINE_MS) {
@@ -923,7 +906,7 @@ async function adRecognition(bvid, pvid, alive = () => true) {
                         continue;
                     }
                 }
-                usedModel = settings.apiModel;
+                if (resultAD) usedModel = settings.apiModel;
             } finally {
                 clearTimeout(aiWatchdog);
                 closePopup(aiPopup);
@@ -931,14 +914,38 @@ async function adRecognition(bvid, pvid, alive = () => true) {
             }
         }
 
-        if (!resultAD || !resultAD?.ads || !resultAD?.msg) {
-            if (cloudBlocked) {
-                // 云端这条路被审核堵死了，但观众弹幕仍是有效信号，试一次再收手
-                const dm = await detectByDanmaku(cid, bvid, pvid);
-                if (dm) return dm;
-                return { ads: [], msg: `云端模型拒绝了这段字幕（${cloudBlocked}），本次未判定广告` };
+        // ② 云端没给出结论时，用内置模型兜底：词表 + 微型决策模型，离线可用、无需 Key
+        if (!resultAD && settings.useBuiltinAdModel !== false && typeof BJSModels !== "undefined") {
+            try {
+                const video = document.querySelector("video");
+                const builtin = await BJSModels.analyzeAds(subtitle, {
+                    duration: video?.duration || 0,
+                    threshold: settings.decisionThreshold,
+                    useWebGPU: settings.useWebGPU !== false
+                });
+                if (builtin) {
+                    resultAD = builtin;
+                    usedModel = builtin.model;
+                    popups.others.push(showPopup(`内置模型：${builtin.ads.length} 段，置信度 ${builtin.confidence}`));
+                } else {
+                    styleLog("内置模型未发现广告段落");
+                }
+            } catch (error) {
+                styleLog("内置模型不可用: " + error.message);
             }
-            return { ads: [], msg: resultAD ? "对象结构解析失败." : "内置模型与云端均未给出结论." };
+        }
+
+        // ③ 云端与本地都没有结论时，最后试一次弹幕信号（弱证据，不写库）
+        if (!resultAD) {
+            const dm = await detectByDanmaku(cid, bvid, pvid);
+            if (dm) return dm;
+        }
+
+        if (!resultAD || !resultAD?.ads || !resultAD?.msg) {
+            const reason = cloudBlocked
+                ? `云端拒绝了这段字幕（${cloudBlocked}）`
+                : cloudSkipped ? `云端未参与（${cloudSkipped}）` : "云端未给出结论";
+            return { ads: [], msg: `${reason}，本地分析也未发现广告` };
         }
         // 会话已被新页面取代时，不要再写库、不要动 UI
         if (!alive()) return null;

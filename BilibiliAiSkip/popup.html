@@ -426,12 +426,13 @@
     </div>
     <div class="setting">
         <label class="checkbox-label" for="useBuiltinAdModel">
-            内置广告识别模型（离线）
+            本地分析兜底（离线）
             <span>
                 <input type="checkbox" id="useBuiltinAdModel">
                 <span class="switch"></span>
             </span>
         </label>
+        <small>内置广告词表 + 微型决策模型，云端无结果时接管，不需要 Key</small>
         <small id="modelStatus">正在检测内置模型…</small>
     </div>
     <div class="setting">
@@ -456,12 +457,13 @@
     </div>
     <div class="setting">
         <label class="checkbox-label" for="useCloudAI">
-            内置模型无结果时回退云端 AI
+            优先使用云端 AI
             <span>
                 <input type="checkbox" id="useCloudAI">
                 <span class="switch"></span>
             </span>
         </label>
+        <small>云端失败（未配置 / 报错 / 拒绝分析）时自动改用下方本地模型</small>
     </div>
     <div class="setting">
         <label class="checkbox-label" for="useWebGPU">
